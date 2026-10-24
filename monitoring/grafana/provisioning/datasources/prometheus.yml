@@ -1,0 +1,10 @@
+# Grafana 가 시작할 때 Prometheus 데이터소스를 자동으로 등록한다 (Day 30)
+apiVersion: 1
+datasources:
+    - name: Prometheus
+      uid: prometheus
+      type: prometheus
+      access: proxy
+      url: http://prometheus:9090
+      isDefault: true
+      editable: true

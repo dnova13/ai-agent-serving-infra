@@ -1,0 +1,156 @@
+# 이 프로젝트의 유일한 docker-compose 파일이다. (archive/d1-ai-agent/docker-compose.yml 은 더 이상 쓰지 않는다.)
+# 실행은 이 폴더(ai-agent-serving-infra)에서:
+#   docker compose up -d                 # 전체
+#   docker compose up -d kafka kafka-ui  # Kafka 만 (zookeeper 는 자동으로 같이 뜸)
+#   docker compose down                  # 컨테이너 삭제 (데이터는 docker-data/ 에 남음)
+#
+# 데이터 저장: Docker 볼륨 대신 이 폴더의 docker-data/ 아래 하위 폴더에 바인드 마운트한다.
+#   docker-data/qdrant          Qdrant 컬렉션 (벡터, 페이로드)
+#   docker-data/redis           Redis 덤프
+#   docker-data/kafka           Kafka 토픽, 메시지, consumer offset
+#   docker-data/zookeeper-data  ZooKeeper 데이터(브로커/토픽 메타데이터)
+#   docker-data/zookeeper-log   ZooKeeper 트랜잭션 로그
+#   docker-data/prometheus      Prometheus 시계열 데이터 (Day 30)
+#   docker-data/grafana         Grafana 설정과 DB (Day 30)
+# 초기화하려면 컨테이너를 내리고(docker compose down) 해당 하위 폴더의 내용을 지운다.
+# docker-data/ 의 내용은 .gitignore 로 커밋하지 않는다.
+#
+# d1 에서 바꾼 점 (의도한 변경)
+#   1) 데이터 저장을 named volume -> docker-data/ 바인드 마운트로 변경.
+#   2) Kafka 리스너를 둘로 나눴다. 호스트(파이썬, 스프링)는 localhost:9092, 컨테이너 안(kafka-ui)은 kafka:29092.
+#      d1 처럼 광고 주소를 localhost:9092 하나로 두면 kafka-ui 가 컨테이너 안에서 localhost 로 접속하려다 실패한다.
+#   3) kafka-ui 호스트 포트를 8080 -> 8090 으로 바꿨다. 8080 은 Spring Boot 기본 포트다.
+#   4) 컨슈머 그룹 첫 리밸런스 지연을 0 으로 줄였다(로컬 실험 대기 시간 단축).
+#
+# Day 30 에서 추가한 것 (모니터링)
+#   prometheus(9090), grafana(3000), kafka-exporter(9308), redis-exporter(9121). 설정 파일은 monitoring/ 아래.
+#   docker compose up -d prometheus grafana kafka-exporter redis-exporter
+
+services:
+    # ── Vector DB ──────────────────────────────
+    qdrant:
+        image: qdrant/qdrant:latest
+        container_name: qdrant
+        ports:
+            - '6333:6333' # REST API + Dashboard (http://localhost:6333/dashboard)
+            - '6334:6334' # gRPC
+        volumes:
+            - ./docker-data/qdrant:/qdrant/storage
+        restart: unless-stopped
+
+    # ── Cache / State / Distributed Lock ───────
+    redis:
+        image: redis:7-alpine
+        container_name: redis1
+        ports:
+            - '6379:6379'
+        volumes:
+            - ./docker-data/redis:/data
+        restart: unless-stopped
+
+    # ── Message Queue ───────────────────────────
+    zookeeper:
+        image: confluentinc/cp-zookeeper:7.6.0
+        container_name: zookeeper1
+        environment:
+            ZOOKEEPER_CLIENT_PORT: 2181
+            ZOOKEEPER_TICK_TIME: 2000
+        volumes:
+            - ./docker-data/zookeeper-data:/var/lib/zookeeper/data
+            - ./docker-data/zookeeper-log:/var/lib/zookeeper/log
+        ports:
+            - '2181:2181'
+        restart: unless-stopped
+
+    kafka:
+        image: confluentinc/cp-kafka:7.6.0
+        container_name: kafka
+        depends_on:
+            - zookeeper
+        ports:
+            - '9092:9092' # 호스트(파이썬, 스프링)에서 접속하는 포트
+        environment:
+            KAFKA_BROKER_ID: 1
+            KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+            KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092
+            KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+            KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+            KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+            KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+            KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+            KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+        volumes:
+            - ./docker-data/kafka:/var/lib/kafka/data
+        restart: unless-stopped
+
+    # ── (선택) Kafka 토픽/메시지 확인용 GUI ──────
+    kafka-ui:
+        image: provectuslabs/kafka-ui:latest
+        container_name: kafka-ui
+        depends_on:
+            - kafka
+        ports:
+            - '8090:8080' # http://localhost:8090 (호스트 8080 은 Spring Boot 용으로 비워 둠)
+        environment:
+            KAFKA_CLUSTERS_0_NAME: local
+            KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+        restart: unless-stopped
+
+    # ── Monitoring (Day 30) ─────────────────────
+    prometheus:
+        image: prom/prometheus:latest
+        container_name: prometheus1
+        user: '0' # 바인드 마운트(docker-data/prometheus)에 쓰기 위해 root 로 실행 (로컬 실험용)
+        ports:
+            - '9090:9090' # http://localhost:9090 (대상 상태: /targets)
+        volumes:
+            - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+            - ./docker-data/prometheus:/prometheus
+        command:
+            - '--config.file=/etc/prometheus/prometheus.yml'
+            - '--storage.tsdb.path=/prometheus'
+            - '--storage.tsdb.retention.time=7d'
+        extra_hosts:
+            - 'host.docker.internal:host-gateway' # 호스트의 Spring(8080), FastAPI(8000, 8001) 접근용
+        restart: unless-stopped
+
+    grafana:
+        image: grafana/grafana:latest
+        container_name: grafana1
+        user: '0'
+        depends_on:
+            - prometheus
+        ports:
+            - '3000:3000' # http://localhost:3000 (로그인 없이 보기만 가능, 편집은 admin / admin)
+        environment:
+            GF_SECURITY_ADMIN_USER: admin
+            GF_SECURITY_ADMIN_PASSWORD: admin
+            GF_AUTH_ANONYMOUS_ENABLED: 'true'
+            GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+        volumes:
+            - ./docker-data/grafana:/var/lib/grafana
+            - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+            - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+        restart: unless-stopped
+
+    kafka-exporter:
+        image: danielqsj/kafka-exporter:latest
+        container_name: kafka-exporter
+        depends_on:
+            - kafka
+        command:
+            - '--kafka.server=kafka:29092' # 컨테이너 안에서 접속하는 리스너
+        ports:
+            - '9308:9308' # http://localhost:9308/metrics
+        restart: unless-stopped
+
+    redis-exporter:
+        image: oliver006/redis_exporter:latest
+        container_name: redis-exporter
+        depends_on:
+            - redis
+        environment:
+            REDIS_ADDR: redis://redis:6379
+        ports:
+            - '9121:9121' # http://localhost:9121/metrics
+        restart: unless-stopped

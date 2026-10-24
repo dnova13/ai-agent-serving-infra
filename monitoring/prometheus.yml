@@ -1,0 +1,41 @@
+# Prometheus 설정 (Day 30)
+# 5초마다 아래 대상(target)의 /metrics 를 가져온다. 확인: http://localhost:9090/targets
+#
+# 호스트에서 도는 Spring(8080), FastAPI 워커(8000, 8001)는 컨테이너 안에서 host.docker.internal 로 접근한다.
+# (Docker Desktop 에서는 기본 제공. docker-compose.yml 의 prometheus 에 extra_hosts 도 걸어 두었다.)
+global:
+    scrape_interval: 5s
+    evaluation_interval: 5s
+
+scrape_configs:
+    - job_name: prometheus
+      static_configs:
+          - targets: ['localhost:9090']
+
+    # Spring WAS (8080). build.gradle 의 actuator + micrometer-registry-prometheus 필요
+    - job_name: spring
+      metrics_path: /actuator/prometheus
+      static_configs:
+          - targets: ['host.docker.internal:8080']
+
+    # FastAPI 워커 (8000, 8001). 8001 은 두 번째 워커를 켰을 때만 UP 이다
+    - job_name: fastapi
+      metrics_path: /metrics
+      static_configs:
+          - targets: ['host.docker.internal:8000', 'host.docker.internal:8001']
+
+    # Kafka: kafka-exporter 컨테이너(9308)가 브로커에서 토픽 offset 과 컨슈머 그룹 lag 를 읽어 노출
+    - job_name: kafka
+      static_configs:
+          - targets: ['kafka-exporter:9308']
+
+    # Redis: redis-exporter 컨테이너(9121)
+    - job_name: redis
+      static_configs:
+          - targets: ['redis-exporter:9121']
+
+    # Qdrant (6333): 자체 /metrics 를 제공한다
+    - job_name: qdrant
+      metrics_path: /metrics
+      static_configs:
+          - targets: ['qdrant:6333']

@@ -1,0 +1,63 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environments
+venv/
+
+# IDE
+.vscode
+
+# OS / 기타 루트 파일
+.DS_Store
+*.xlsx
+image.png
+
+# Secrets
+.env
+.venv/
+
+# Docker 컨테이너 데이터 (docker-compose.yml 의 바인드 마운트). 폴더만 남기고 내용은 커밋하지 않는다.
+docker-data/*
+!docker-data/.gitkeep
+
+# Day 28: k6 실행 결과 기록
+scripts/k6/out/
+SESSION_LOG.md
+# Claude Code 로컬 설정
+.claude/
+
+# 로컬 전용 작업 폴더
+private/
