@@ -3,7 +3,7 @@
 > 모델 한 곳이 실패하거나 느려져도 서비스가 멈추지 않게 하는 폴백(서킷 브레이커)을 만들고, 실제로 되는지 확인
 
 > 모델 한 곳이 실패하거나 느려져도 서비스가 멈추지 않게 하는 폴백(서킷 브레이커)을 만들고, 실제로 되는지 확인
-> **가짜 모델 점검 PASS 8, 실제 모델 3단계 PASS 3 (결과는 [DAY36_RESULT.md](DAY36_RESULT.md)).**
+> **앞 모델 가짜 + 뒤 모델 실제 Claude 점검 PASS 7, 실제 모델 3단계 PASS 3 (결과는 [DAY36_RESULT.md](DAY36_RESULT.md)).**
 > 코드 흐름은 [DAY36_CODE_GUIDE.md](DAY36_CODE_GUIDE.md). 앞선 결과: [DAY35_RESULT.md](DAY35_RESULT.md).
 > 이 날도 **가짜 모델과 실제 모델을 둘 다 쓴다**. 가짜 모델은 폴백과 브레이커 동작을 정확히 확인하고, 실제 모델은 Gemini, Claude 가 실제로 이어지는지 소량으로 본다.
 
@@ -21,12 +21,14 @@
 | ① Gemini 만, ② Claude 만 각각 질문이 성공한다 (기준선)                                                            | 실제 |
 | ③ 폴백 `gemini>claude` 에서 Gemini(실제 호출)가 무료 한도 등으로 실제로 실패하면 질문은 성공하고 Claude 가 답한다 | 실제 |
 
+> 위 "가짜" 점검 중 B, D, C, E 는 `fake>claude`(뒤 모델이 실제 Claude)로도 돈다(4절 ①-2). 뒤 모델까지 가짜인 `fake>fake-b` 점검은 코드에 남아 있어 무료로 다시 돌릴 수 있다.
+
 ## 2. 바뀐 것
 
 | 파일                                                          | 내용                                                                                                   |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `d2-ai-python/app/services/model_fallback.py` (새 파일)       | `FallbackChatModel`(앞 모델 실패 시 다음 모델), 서킷 브레이커, 장애 주입, 통계                         |
-| `d2-ai-python/app/checks/model_fallback_check.py` (새 파일) | 가짜 모델 점검(PASS/FAIL)과 `--real` 실제 모델 ①②③ 실행(`--only` 로 한 단계만 가능)                    |
+| `d2-ai-python/app/checks/model_fallback_check.py` (새 파일) | 가짜 모델 점검(PASS/FAIL), `--real` 실제 모델 ①②③ 실행(`--only` 로 한 단계만 가능), `--fake-claude` 앞 모델 가짜 + 뒤 모델 실제 Claude(`--dry`, `--cooldown`) |
 | `agent_graph.py` 의 `get_model`                               | provider 에 `>` 가 있으면 폴백 모델을 만든다. `fake-b`(가짜 두 번째 모델) 추가. `>` 없으면 이전과 같다 |
 | `fake_llm.py`                                                 | `FakeChatModel` 이 이름표를 받는다(기본 `fake`, 답은 이전과 같다)                                      |
 | `metrics.py`                                                  | `agent_model_fallbacks_total{from_model,reason}`, `agent_model_served_total{model}` 추가               |
@@ -55,6 +57,19 @@
     python -m app.checks.model_fallback_check
 
 PASS 8, 결과 PASS 면 통과. 몇 초 걸린다(장애 주입 지연 0.3초 × 몇 번).
+
+### ①-2. 앞 모델 가짜 + 뒤 모델 실제 Claude (Claude 를 부른다)
+
+    python -m app.checks.model_fallback_check --fake-claude --dry
+    python -m app.checks.model_fallback_check --fake-claude --cooldown 30
+
+`--dry` 는 뒤 모델을 가짜로 바꿔 Claude 를 부르지 않고 흐름만 본다(Claude 0번). 두 번째는 실제 Claude 를 약 32번 부르고, 코드가 40번에서 멈춘다. `ANTHROPIC_API_KEY` 가 필요하다(검색 도구는 쓰지 않는다).
+
+**기대**
+
+- PASS 7, 결과 PASS. 약 2분(D, C 단계가 쉬는 시간 30초씩 기다린다).
+- B: 뒤 모델 claude 10/10, 앞 모델 실패 3회·건너뜀 7회. 브레이커 있음이 없음보다 빠르다.
+- `--cooldown` 을 안 붙이면 쉬는 시간이 1초라서, Claude 한 번(약 1초)보다 짧아 도중에 다시 시도가 끼어 앞 모델 실패가 3회보다 늘고 FAIL 이 나올 수 있다. 쉬는 시간은 호출 시간보다 길게 둔다.
 
 ### ② 실제 모델 (Gemini, Claude 를 실제로 부른다)
 
@@ -97,6 +112,7 @@ Gemini 무료 한도는 작아서 걸릴 수 있다. 한도에 걸려 Gemini 가
 ## 6. 체크리스트
 
 - [ ] ① 가짜 모델 PASS 8
+- [ ] ①-2 앞 모델 가짜 + 뒤 모델 Claude PASS 7(`--cooldown 30`)
 - [ ] 실제 모델 ① Gemini 만 (참고)
 - [ ] 실제 모델 ② Claude 만 성공
 - [ ] 실제 모델 ③ 폴백 성공(Gemini 가 실패한 경우 Claude 가 답함)

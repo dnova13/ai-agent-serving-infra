@@ -30,6 +30,7 @@
 ## 3. model_fallback_check.py
 
 - 기본(가짜): `fake>fake-b` 로 A 정상, B 앞 모델 장애(+브레이커 효과 비교: 기준을 1000 으로 올려 브레이커를 사실상 끈 실행과 시간 비교), D 쉬는 시간 뒤 재시도 실패, C 복구, E 모두 장애, F 모르는 모델 이름. 모델 호출을 직접 하므로 서버가 필요 없고, 가짜 모델 지연은 0 으로 둔다.
+- `--fake-claude`: 앞 모델 `fake`(장애 주입), 뒤 모델 `claude`. `CountedBack` 이 뒤 모델 호출 횟수와 시간을 기록하고 상한(`CLAUDE_CALL_LIMIT` 40번)에 닿으면 멈춘다. `--dry` 는 뒤 모델을 `fake-b` 로 바꿔 Claude 를 부르지 않는다. `--cooldown` 으로 브레이커 쉬는 시간을 바꾼다(기본 1.0, 실제 Claude 에는 30). F(모르는 모델 이름)는 `fake>fake-b` 점검과 같아 빠졌다.
 - `--real`: `--only gemini|claude|fallback` 으로 한 단계만 돌릴 수 있고(`run_real` 의 `stages` 에서 고른 키가 아닌 단계는 건너뛴다), 없으면 세 단계가 모두 돈다. `run_agent` 를 질문마다 직접 부른다(Redis 대화 저장 없음). ① `gemini`(참고, 판정 안 함) ② `claude` ③ `gemini>claude`. 가짜 장애 없이 실제로 부른다. 질문은 5개를 돌려 쓰며(`QUESTIONS[i % 5]`) `--n`(한 단계에서 보낼 질문 수, 기본 3)으로 건수를 정한다. 질문은 한 건씩 차례로 보낸다. 성공 수, 평균·최대 시간, ③ 은 호출 기록(`STATS`)을 출력한다.
 - 종료 코드: FAIL 이 하나라도 있으면 1, 아니면 0.
 
